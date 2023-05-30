@@ -8,6 +8,8 @@ from importlib import __import__
 from typing import Dict, Optional, Set, Union
 from weakref import WeakSet
 
+import torch
+
 log = logging.getLogger(__name__)
 
 DEFAULT_LOG_LEVEL = logging.WARN
@@ -61,6 +63,7 @@ class LogRegistry:
     # register a log with an alias
     def register_log(self, alias, log_qname):
         self.log_alias_to_log_qname[alias] = log_qname
+        torch._C._register_log_component(alias, log_qname)
 
     # register an artifact name
     def register_artifact_name(
@@ -90,6 +93,9 @@ class LogRegistry:
 
     def get_log_qnames(self):
         return set(self.log_alias_to_log_qname.values())
+
+    def get_log_aliases_qnames(self):
+        return set(self.log_alias_to_log_qname.items())
 
     def get_artifact_log_qnames(self):
         return set(self.artifact_log_qnames)
@@ -685,10 +691,14 @@ def _clear_handlers(log):
 
 
 def _reset_logs():
+    log_level_reset = logging.WARNING
+
     # reset all registered logs
-    for log_qname in log_registry.get_log_qnames():
+    for log_alias, log_qname in log_registry.get_log_aliases_qnames():
         log = logging.getLogger(log_qname)
-        log.setLevel(logging.WARNING)
+
+        log.setLevel(log_level_reset)
+        torch._C._enable_log(log_alias, log_level_reset)
         log.propagate = False
         _clear_handlers(log)
 
@@ -714,9 +724,12 @@ def _init_logs(log_file_name=None):
     _reset_logs()
     _update_log_state_from_env()
 
-    for log_qname, level in log_state.get_log_level_pairs():
-        log = logging.getLogger(log_qname)
-        log.setLevel(level)
+    for alias, log_qname in log_registry.get_log_aliases_qnames():
+        if log_qname in log_state.log_qname_to_level:
+            level = log_state.log_qname_to_level[log_qname]
+            log = logging.getLogger(log_qname)
+            log.setLevel(level)
+            torch._C._enable_log(alias, level)
 
     # setup handlers for all registered loggers
     for log_qname in log_registry.get_log_qnames():
