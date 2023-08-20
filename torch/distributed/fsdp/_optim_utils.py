@@ -285,7 +285,16 @@ def _unflatten_communicated_optim_state(
                 views = flat_param_views[state_name]
             optim_state: Union[torch.Tensor, ShardedTensor, DTensor] = next(views)
             if shard_state:
-                if not fsdp_state._optim_state_dict_config._use_dtensor:
+                osd_config = fsdp_state._optim_state_dict_config
+                if (
+                    hasattr(osd_config, "_use_dtensor")
+                    and osd_config._use_dtensor is True
+                ):
+                    assert fsdp_state._device_mesh is not None
+                    optim_state = _ext_chunk_dtensor(
+                        optim_state, fsdp_state.rank, fsdp_state._device_mesh
+                    )
+                else:
                     assert fsdp_state.process_group is not None
                     optim_state = _ext_chunk_tensor(
                         optim_state,
@@ -294,12 +303,6 @@ def _unflatten_communicated_optim_state(
                         fsdp_state._device_handle.device_count(),
                         fsdp_state.process_group,
                     )
-                else:
-                    assert fsdp_state._device_mesh is not None
-                    optim_state = _ext_chunk_dtensor(
-                        optim_state, fsdp_state.rank, fsdp_state._device_mesh
-                    )
-
             unflat_state_param[state_name] = optim_state
 
         # Add zero-dimension tensor state: take the target rank's value
@@ -1641,7 +1644,13 @@ def _gather_orig_param_state(
             flat_param._shapes[param_idx]
         )
         if shard_state:
-            if not fsdp_state._optim_state_dict_config._use_dtensor:
+            osd_config = fsdp_state._optim_state_dict_config
+            if hasattr(osd_config, "_use_dtensor") and osd_config._use_dtensor is True:
+                assert fsdp_state._device_mesh is not None
+                value = _ext_chunk_dtensor(
+                    value, fsdp_state.rank, fsdp_state._device_mesh
+                )
+            else:
                 assert fsdp_state.process_group is not None
                 value = _ext_chunk_tensor(
                     value,
@@ -1649,11 +1658,6 @@ def _gather_orig_param_state(
                     fsdp_state.world_size,
                     fsdp_state._device_handle.device_count(),
                     fsdp_state.process_group,
-                )
-            else:
-                assert fsdp_state._device_mesh is not None
-                value = _ext_chunk_dtensor(
-                    value, fsdp_state.rank, fsdp_state._device_mesh
                 )
         value = value.cpu()
         gathered_state[state_name] = value
