@@ -1,3 +1,4 @@
+import functools
 import inspect
 import operator
 import types
@@ -644,6 +645,62 @@ class TensorVariable(VariableTracker):
                 ),
                 **options,
             )
+        elif name == "register_hook":
+            import os
+
+            gpu_id = int(os.environ.get("LOCAL_RANK", 0))
+            # see On dynamo tensor_hooks
+            assert len(args) == 1
+            fn_var = args[0]
+
+            if isinstance(fn_var, variables.NestedUserFunctionVariable):
+                # NestedUserFunctionVariable don't carry their fn, but reconstruction builds it
+                # This should not be onerous to support when needed.
+                unimplemented("NYI - lambda variables as hooks")
+            elif isinstance(fn_var.fn, functools.partial):
+                fn = fn_var.fn
+                name = fn_var.fn.func.__name__
+            else:
+                fn = fn_var.fn
+                name = fn_var.fn.__name__
+
+            handle = self.as_proxy().node.meta["example_value"].register_hook(fn)
+
+            handle_variable = variables.user_defined.RemovableHandleVariable(
+                handle,
+                last_seen_name=None,
+                mutable_local=variables.base.MutableLocal(),
+                **options,
+            )
+            src = tx.store_hook(name, fn)
+            if not self.source:
+                # Intermediary
+                from .builder import GraphArg
+
+                new_name = tx.store_handle("intermed_handle", handle)
+                handle_variable.as_global = new_name
+
+                hook_proxy = tx.output.root_tracer.create_graph_input(
+                    name, type(fn), source=src
+                )
+                grapharg = GraphArg(src, fn, False, None)
+                grapharg.has_symbols = False
+                hook_proxy.node.meta["grapharg"] = grapharg
+                # this is a placeholder implementation for now, the real POR to avoid recompiling on hook identity
+                # is to add an op in forward that is persisted through functionalization, and stashes hooks in a well defined
+                # place - this allows relaxing specialization from hook identity to # of hooks (and their positions)
+                self.as_proxy().register_hook(hook_proxy)
+                if fn_var.source:
+                    tx.output.guards.add(
+                        fn_var.source.make_guard(GuardBuilder.ID_MATCH)
+                    )
+            else:
+                fn_var.source = src
+            if gpu_id == 0:
+                print(f"Registering hook with source {self.source}, with fn {fn}")
+            tx.output.side_effects.register_hook(self, fn_var, handle_variable)
+            return handle_variable
+
         else:
             # Convert x.new(torch.Size) into x.new_empty(torch.Size),
             # as Tensor.new acts differently with a Size input versus a tuple input.
