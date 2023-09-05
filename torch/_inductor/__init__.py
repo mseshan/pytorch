@@ -69,7 +69,7 @@ def list_mode_options(
         >>> torch._inductor.list_mode_options()
     """
 
-    mode_options: Dict = {
+    mode_options: Dict[str, Dict[str, bool]] = {
         "default": {},
         # enable cudagraphs
         "reduce-overhead": {
@@ -86,7 +86,7 @@ def list_mode_options(
             "triton.cudagraphs": True,
         },
     }
-    return mode_options[mode] if mode else mode_options
+    return mode_options[mode] if mode else mode_options  # type: ignore[return-value]
 
 
 def list_options() -> List[str]:
